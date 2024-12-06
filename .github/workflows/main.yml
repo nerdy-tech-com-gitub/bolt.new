@@ -1,0 +1,94 @@
+name: Universal Quality and Build Check
+
+on:
+  push:
+    branches: [ main, master, dev, develop, staging ]
+  pull_request:
+    branches: [ main, master, dev, develop, staging ]
+
+jobs:
+  detect-and-check:
+    runs-on: ubuntu-latest
+    permissions: # Added permissions for automatic releases
+      contents: write
+      issues: write
+      pull-requests: write
+    
+    steps:
+    - uses: actions/checkout@v3
+      with:
+        fetch-depth: 0 # Required for GitVersion
+
+    # Super-Linter (runs first as it covers multiple languages)
+    - name: Super-Linter
+      uses: super-linter/super-linter@v7.2.0
+      env:
+        VALIDATE_ALL_CODEBASE: true
+        DEFAULT_BRANCH: main
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # Disable certain linters that might conflict with language-specific ones
+        VALIDATE_JSCPD: false
+        VALIDATE_NATURAL_LANGUAGE: false
+
+    # GitTools for versioning
+    - name: Install GitVersion
+      uses: GitTools/actions@v3.0.3
+      with:
+        versionSpec: '5.x'
+
+    - name: Determine Version
+      id: gitversion
+      uses: GitTools/actions@v3.0.3
+      with:
+        configFilePath: GitVersion.yml
+
+    [Previous detection and language-specific checks remain here...]
+
+    # Report Generator - after all tests
+    - name: ReportGenerator
+      uses: danielpalme/ReportGenerator-GitHub-Action@5.4.1
+      with:
+        reports: '**/coverage.xml;**/coverage.cobertura.xml;**/coverage/lcov.info'
+        targetdir: 'coveragereport'
+        reporttypes: 'HtmlInline;Cobertura;Badges'
+        verbosity: 'Info'
+        tag: '${{ github.run_number }}_${{ github.run_id }}'
+
+    # Automatic Release (only on main/master branch)
+    - name: Create Release
+      if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+      uses: marvinpinto/action-automatic-releases@v1.2.1
+      with:
+        repo_token: ${{ secrets.GITHUB_TOKEN }}
+        automatic_release_tag: ${{ steps.gitversion.outputs.semVer }}
+        prerelease: false
+        title: "Release ${{ steps.gitversion.outputs.semVer }}"
+        files: |
+          LICENSE*
+          *.jar
+          *.war
+          *.zip
+          *.tar.gz
+          dist/*
+          build/*
+          coveragereport/*
+
+    # Upload coverage report as artifact
+    - name: Upload coverage report
+      uses: actions/upload-artifact@v3
+      with:
+        name: Coverage-Report
+        path: coveragereport/
+
+    # Report project type and completion
+    - name: Report Project Type
+      run: |
+        echo "Detected project type: ${{ steps.detect.outputs.type }}"
+        echo "Version: ${{ steps.gitversion.outputs.semVer }}"
+        echo "Checks completed. Review the logs for any issues."
+
+    # Notify on failure
+    - name: Notify on Failure
+      if: failure()
+      run: |
+        echo "::error::Quality checks failed. Please review the logs above for details."
